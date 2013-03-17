@@ -97,9 +97,6 @@ class HTTP(BaseException):
             if not body:
                 body = status
             if isinstance(body, str):
-                if len(body) < 512 and \
-                        headers['Content-Type'].startswith('text/html'):
-                    body += '<!-- %s //-->' % ('x' * 512)  # trick IE
                 headers['Content-Length'] = len(body)
         rheaders = []
         for k, v in headers.iteritems():
@@ -154,4 +151,3 @@ def redirect(location='', how=303, client_side=False):
         from gluon import current
         if client_side and current.request.ajax:
             raise HTTP(200, **{'web2py-component-command': 'window.location.reload(true)'})
-    

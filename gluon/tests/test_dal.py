@@ -31,6 +31,7 @@ ALLOWED_DATATYPES = [
     'datetime',
     'upload',
     'password',
+    'json',
     ]
 
 
@@ -62,14 +63,14 @@ class TestFields(unittest.TestCase):
 
     def testFieldTypes(self):
 
-        # Check that string, text, and password default length is 512
+        # Check that string, and password default length is 512
         for typ in ['string', 'password']:
             self.assert_(Field('abc', typ).length == 512,
                          "Default length for type '%s' is not 512 or 255" % typ)
 
         # Check that upload default length is 512
         self.assert_(Field('abc', 'upload').length == 512,
-                     "Default length for type 'upload' is not 128")
+                     "Default length for type 'upload' is not 512")
 
         # Check that Tables passed in the type creates a reference
         self.assert_(Field('abc', Table(None, 'temp')).type
@@ -112,6 +113,10 @@ class TestFields(unittest.TestCase):
         db.define_table('t', Field('a', 'boolean', default=True))
         self.assertEqual(db.t.insert(a=True), 1)
         self.assertEqual(db().select(db.t.a)[0].a, True)
+        db.t.drop()
+        db.define_table('t', Field('a', 'json', default={}))
+        self.assertEqual(db.t.insert(a={}), 1)
+        self.assertEqual(db().select(db.t.a)[0].a, {})
         db.t.drop()
         db.define_table('t', Field('a', 'date',
                         default=datetime.date.today()))
@@ -280,6 +285,22 @@ class TestBelongs(unittest.TestCase):
         db.t.drop()
 
 
+class TestContains(unittest.TestCase):
+    def testRun(self):
+        db = DAL('sqlite:memory:')
+        db.define_table('t', Field('a', 'list:string'))
+        self.assertEqual(db.t.insert(a=['aaa','bbb']), 1)
+        self.assertEqual(db.t.insert(a=['bbb','ddd']), 2)
+        self.assertEqual(db.t.insert(a=['eee','aaa']), 3)
+        self.assertEqual(len(db(db.t.a.contains('aaa')).select()),
+                         2)
+        self.assertEqual(len(db(db.t.a.contains('bbb')).select()),
+                         2)
+        self.assertEqual(len(db(db.t.a.contains('aa')).select()),
+                         0)
+        db.t.drop()
+
+
 class TestLike(unittest.TestCase):
 
     def testRun(self):
@@ -298,6 +319,11 @@ class TestLike(unittest.TestCase):
         self.assertEqual(len(db(db.t.a.upper().like('%B%')).select()),
                          1)
         self.assertEqual(len(db(db.t.a.upper().like('%C')).select()), 1)
+        db.t.drop()
+        db.define_table('t', Field('a', 'integer'))
+        self.assertEqual(db.t.insert(a=1111111111), 1)
+        self.assertEqual(len(db(db.t.a.like('1%')).select()), 1)
+        self.assertEqual(len(db(db.t.a.like('2%')).select()), 0)
         db.t.drop()
 
 
@@ -592,7 +618,96 @@ class TestImportExportUuidFields(unittest.TestCase):
         db.person.drop()
         db.commit()
 
+
+class TestDALDictImportExport(unittest.TestCase):
+
+    def testRun(self):
+        db = DAL('sqlite:memory:')
+        db.define_table('person', Field('name', default="Michael"),Field('uuid'))
+        db.define_table('pet',Field('friend',db.person),Field('name'))
+        dbdict = db.as_dict(flat=True, sanitize=False)
+        assert isinstance(dbdict, dict)
+        uri = dbdict["uri"]
+        assert isinstance(uri, basestring) and uri
+        assert len(dbdict["items"]) == 2
+        assert len(dbdict["items"]["person"]["items"]) == 3
+        assert dbdict["items"]["person"]["items"]["name"]["type"] == db.person.name.type
+        assert dbdict["items"]["person"]["items"]["name"]["default"] == db.person.name.default
+        assert dbdict
+
+        db2 = DAL(dbdict)
+        assert len(db.tables) == len(db2.tables)
+        assert hasattr(db2, "pet") and isinstance(db2.pet, Table)
+        assert hasattr(db2.pet, "friend") and isinstance(db2.pet.friend, Field)
+
+        have_serializers = True
+
+        try:
+            import serializers
+            dbjson = db.as_json(sanitize=False)
+            assert isinstance(dbjson, basestring) and len(dbjson) > 0
+            db3 = DAL(serializers.loads_json(dbjson))
+            assert hasattr(db3, "person") and hasattr(db3.person, "uuid") and\
+            db3.person.uuid.type == db.person.uuid.type
+            db3.pet.drop()
+            db3.person.drop()
+            db3.commit()
+        except ImportError:
+            pass
+
+        mpfc = "Monty Python's Flying Circus"
+        dbdict4 = {"uri": 'sqlite:memory:',
+                   "items":{"staff":{"items": {"name":
+                                                   {"default":"Michael"},
+                                               "food":
+                                                   {"default":"Spam"},
+                                               "show":
+                                                   {"type": "reference show"}
+                                               }},
+                            "show":{"items": {"name":
+                                                   {"default":mpfc},
+                                              "rating":
+                                                   {"type":"double"}}}}}
+        db4 = DAL(dbdict4)
+        assert "staff" in db4.tables
+        assert "name" in db4.staff
+        assert db4.show.rating.type == "double"
+        assert (db4.show.insert(), db4.show.insert(name="Loriot"),
+                db4.show.insert(name="Il Mattatore")) == (1, 2, 3)
+        assert db4(db4.show).select().first().id == 1
+        assert db4(db4.show).select().first().name == mpfc
+
+        dbdict5 = {"uri": 'sqlite:memory:'}
+        db5 = DAL(dbdict5)
+        assert db5.tables in ([], None)
+        assert not (str(db5) in ("", None))
+
+        dbdict6 = {"uri": 'sqlite:memory:',
+                   "items":{"staff":{},
+                            "show":{"items": {"name": {},
+                                              "rating":
+                                                 {"type":"double"}}}}}
+        db6 = DAL(dbdict6)
+        assert len(db6["staff"].fields) == 1
+        assert "name" in db6["show"].fields
+
+        assert db6.staff.insert() is not None
+        assert db6(db6.staff).select().first().id == 1
+
+        db6.staff.drop()
+        db6.show.drop()
+        db6.commit()
+        db4.staff.drop()
+        db4.show.drop()
+        db4.commit()
+        db2.pet.drop()
+        db2.person.drop()
+        db2.commit()
+        db.pet.drop()
+        db.person.drop()
+        db.commit()
+
+
 if __name__ == '__main__':
     unittest.main()
     tearDownModule()
-

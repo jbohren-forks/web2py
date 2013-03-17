@@ -56,6 +56,7 @@ current = threading.local()  # thread-local storage for request-scope globals
 css_template = '<link href="%s" rel="stylesheet" type="text/css" />'
 js_template = '<script src="%s" type="text/javascript"></script>'
 coffee_template = '<script src="%s" type="text/coffee"></script>'
+typescript_template = '<script src="%s" type="text/typescript"></script>'
 less_template = '<link href="%s" rel="stylesheet/less" type="text/css" />'
 css_inline = '<style type="text/css">\n%s\n</style>'
 js_inline = '<script type="text/javascript">\n%s\n</script>'
@@ -292,6 +293,9 @@ class Response(Storage):
                     s += js_template % item
                 elif f.endswith('.coffee'):
                     s += coffee_template % item
+                elif f.endswith('.ts'):
+                    # http://www.typescriptlang.org/
+                    s += typescript_template % item
                 elif f.endswith('.less'):
                     s += less_template % item
             elif isinstance(item, (list, tuple)):
@@ -308,8 +312,8 @@ class Response(Storage):
         chunk_size=DEFAULT_CHUNK_SIZE,
         request=None,
         attachment=False,
-        filename=None,
-    ):
+        filename=None
+        ):
         """
         if a controller function::
 
@@ -375,7 +379,7 @@ class Response(Storage):
             wrapped = streamer(stream, chunk_size=chunk_size)
         return wrapped
 
-    def download(self, request, db, chunk_size=DEFAULT_CHUNK_SIZE, attachment=True):
+    def download(self, request, db, chunk_size=DEFAULT_CHUNK_SIZE, attachment=True, download_filename=None):
         """
         example of usage in controller::
 
@@ -384,6 +388,8 @@ class Response(Storage):
 
         downloads from http://..../download/filename
         """
+
+        current.session.forget(current.response)
 
         if not request.args:
             raise HTTP(404)
@@ -398,14 +404,16 @@ class Response(Storage):
         except AttributeError:
             raise HTTP(404)
         try:
-            (filename, stream) = field.retrieve(name)
+            (filename, stream) = field.retrieve(name,nameonly=True)
         except IOError:
             raise HTTP(404)
         headers = self.headers
         headers['Content-Type'] = contenttype(name)
+        if download_filename == None:
+            download_filename = filename
         if attachment:
             headers['Content-Disposition'] = \
-                'attachment; filename="%s"' % filename.replace('"','\"')
+                'attachment; filename="%s"' % download_filename.replace('"','\"')
         return self.stream(stream, chunk_size=chunk_size, request=request)
 
     def json(self, data, default=None):
@@ -687,7 +695,7 @@ class Session(Storage):
 
     def forget(self, response=None):
         self._close(response)
-        self._forget = True
+        self._forget = True        
 
     def _try_store_in_cookie(self, request, response):
         if response.session_storage_type != 'cookie':

@@ -12,6 +12,7 @@ Contains:
 
 """
 
+if False: import import_all # DO NOT REMOVE PART OF FREEZE PROCESS
 import gc
 import cgi
 import cStringIO
@@ -103,13 +104,12 @@ regex_client = re.compile('[\w\-:]+(\.[\w\-]+)*\.?')  # ## to account for IPV6
 
 try:
     version_info = open(pjoin(global_settings.gluon_parent, 'VERSION'), 'r')
-    raw_version_string = version_info.read().strip()
+    raw_version_string = version_info.read().split()[-1].strip()
     version_info.close()
-    global_settings.web2py_version = parse_version(raw_version_string)
+    global_settings.web2py_version = raw_version_string
+    web2py_version = global_settings.web2py_version
 except:
     raise RuntimeError("Cannot determine web2py version")
-
-web2py_version = global_settings.web2py_version
 
 try:
     import rocket
@@ -130,9 +130,8 @@ def get_client(env):
     if all fails, assume '127.0.0.1' or '::1' (running locally)
     """
     g = regex_client.search(env.get('http_x_forwarded_for', ''))
-    if g:
-        client = (g.group() or '').split(',')[0]
-    else:
+    client = (g.group() or '').split(',')[0] if g else None
+    if client in (None, '', 'unkown'):
         g = regex_client.search(env.get('remote_addr', ''))
         if g:
             client = g.group()

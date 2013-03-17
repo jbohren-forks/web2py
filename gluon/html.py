@@ -522,7 +522,6 @@ class XmlComponent(object):
         self['_class'] = ' '.join(classes) if classes else None
         return self
 
-
 class XML(XmlComponent):
     """
     use it to wrap a string that contains XML/HTML so that it will not be
@@ -554,7 +553,7 @@ class XML(XmlComponent):
             'img/',
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
             'table', 'tr', 'td', 'div',
-            'strong',
+            'strong','span',
         ],
         allowed_attributes={
             'a': ['href', 'title', 'target'],
@@ -888,9 +887,8 @@ class DIV(XmlComponent):
 
         # get the attributes for this component
         # (they start with '_', others may have special meanings)
-        fa = ''
-        for key in sorted(self.attributes):
-            value = self[key]
+        attr = []
+        for key, value in self.attributes.iteritems():
             if key[:1] != '_':
                 continue
             name = key[1:]
@@ -898,8 +896,16 @@ class DIV(XmlComponent):
                 value = name
             elif value is False or value is None:
                 continue
+            attr.append((name, value))
+        data = self.attributes.get('data',{})
+        for key, value in data.iteritems():
+            name = 'data-' + key
+            value = data[key]
+            attr.append((name,value))
+        attr.sort()
+        fa = ''
+        for name,value in attr:
             fa += ' %s="%s"' % (name, xmlescape(value, True))
-
         # get the xml for the inner components
         co = join([xmlescape(component) for component in
                    self.components])
@@ -992,7 +998,7 @@ class DIV(XmlComponent):
         >>> a=FORM( INPUT(_type='text'), SELECT(range(1)), TEXTAREA() )
         >>> for c in a.elements('input, select, textarea'): c['_disabled'] = 'disabled'
         >>> a.xml()
-        '<form action="" enctype="multipart/form-data" method="post"><input disabled="disabled" type="text" /><select disabled="disabled"><option value="0">0</option></select><textarea cols="40" disabled="disabled" rows="10"></textarea></form>'
+        '<form action="#" enctype="multipart/form-data" method="post"><input disabled="disabled" type="text" /><select disabled="disabled"><option value="0">0</option></select><textarea cols="40" disabled="disabled" rows="10"></textarea></form>'
 
         Elements that are matched can also be replaced or removed by specifying
         a "replace" argument (note, a list of the original matching elements
@@ -1479,16 +1485,16 @@ class A(DIV):
                 (self['component'], self['target'] or '', d)
             self['_href'] = self['_href'] or '#null'
         elif self['callback']:
-            returnfalse = "var e = arguments[0] || window.event; e.cancelBubble=true; if (e.stopPropagation) e.stopPropagation();"
-            if d:
-                self['_onclick'] = "if(confirm(w2p_ajax_confirm_message||'Are you sure you want o delete this object?')){ajax('%s',[],'%s');%s};%s" % \
+            returnfalse = "var e = arguments[0] || window.event; e.cancelBubble=true; if (e.stopPropagation) {e.stopPropagation(); e.stopImmediatePropagation(); e.preventDefault();}"
+            if d and not self['noconfirm']:
+                self['_onclick'] = "if(confirm(w2p_ajax_confirm_message||'Are you sure you want to delete this object?')){ajax('%s',[],'%s');%s};%s" % \
                     (self['callback'], self['target'] or '', d, returnfalse)
             else:
                 self['_onclick'] = "ajax('%s',[],'%s');%sreturn false" % \
                     (self['callback'], self['target'] or '', d)
             self['_href'] = self['_href'] or '#null'
         elif self['cid']:
-	    pre = self['pre_call'] + ';' if self['pre_call'] else ''
+            pre = self['pre_call'] + ';' if self['pre_call'] else ''
             self['_onclick'] = '%sweb2py_component("%s","%s");%sreturn false;' % \
                 (pre,self['_href'], self['cid'], d)
         return DIV.xml(self)
@@ -1734,7 +1740,7 @@ class INPUT(DIV):
         if self['_type'] != 'checkbox':
             self['old_value'] = self['value'] or self['_value'] or ''
             value = request_vars_get(name, '')
-            self['value'] = value
+            self['value'] = value if not hasattr(value,'file') else None
         else:
             self['old_value'] = self['value'] or False
             value = request_vars_get(name)
@@ -1933,7 +1939,7 @@ class FORM(DIV):
         >>> from validators import IS_NOT_EMPTY
         >>> form=FORM(INPUT(_name=\"test\", requires=IS_NOT_EMPTY()))
         >>> form.xml()
-        '<form action=\"\" enctype=\"multipart/form-data\" method=\"post\"><input name=\"test\" type=\"text\" /></form>'
+        '<form action=\"#\" enctype=\"multipart/form-data\" method=\"post\"><input name=\"test\" type=\"text\" /></form>'
 
     a FORM is container for INPUT, TEXTAREA, SELECT and other helpers
 
@@ -2034,7 +2040,7 @@ class FORM(DIV):
 
     def _postprocessing(self):
         if not '_action' in self.attributes:
-            self['_action'] = ''
+            self['_action'] = '#'
         if not '_method' in self.attributes:
             self['_method'] = 'post'
         if not '_enctype' in self.attributes:
@@ -2052,7 +2058,7 @@ class FORM(DIV):
         if hasattr(self, 'formname') and self.formname:
             c.append(INPUT(_type='hidden', _name='_formname',
                      _value=self.formname))
-        return DIV(c, _class="hidden")
+        return DIV(c, _style="display:none;")
 
     def xml(self):
         newform = FORM(*self.components, **self.attributes)
@@ -2144,7 +2150,7 @@ class FORM(DIV):
                     current.response.flash = message_onchange
                 elif callable(onchange):
                     onchange(self)
-                return False
+            return False
 
     def process(self, **kwargs):
         """
@@ -2204,6 +2210,68 @@ class FORM(DIV):
         form = FORM(INPUT(_type='submit', _value=text), *inputs)
         form.process()
         return form
+
+    def as_dict(self, flat=False, sanitize=True):
+        """EXPERIMENTAL
+
+        Sanitize is naive. It should catch any unsafe value
+        for client retrieval.
+        """
+        SERIALIZABLE = (int, float, bool, basestring, long,
+                        set, list, dict, tuple, Storage, type(None))
+        UNSAFE = ("PASSWORD", "CRYPT")
+        d = self.__dict__
+
+        def sanitizer(obj):
+            if isinstance(obj, dict):
+                for k in obj.keys():
+                    if any([unsafe in str(k).upper() for
+                           unsafe in UNSAFE]):
+                       # erease unsafe pair
+                       obj.pop(k)
+            else:
+                # not implemented
+                pass
+            return obj
+
+        def flatten(obj):
+            if isinstance(obj, (dict, Storage)):
+                newobj = obj.copy()
+            else:
+                newobj = obj
+            if sanitize:
+                newobj = sanitizer(newobj)
+            if flat:
+                if type(obj) in SERIALIZABLE:
+                    if isinstance(newobj, (dict, Storage)):
+                        for k in newobj:
+                            newk = flatten(k)
+                            newobj[newk] = flatten(newobj[k])
+                            if k != newk:
+                                newobj.pop(k)
+                        return newobj
+                    elif isinstance(newobj, (list, tuple, set)):
+                        return [flatten(item) for item in newobj]
+                    else:
+                        return newobj
+                else: return str(newobj)
+            else: return newobj
+        return flatten(d)
+
+    def as_json(self, sanitize=True):
+        d = self.as_dict(flat=True, sanitize=sanitize)
+        from serializers import json
+        return json(d)
+
+    def as_yaml(self, sanitize=True):
+        d = self.as_dict(flat=True, sanitize=sanitize)
+        from serializers import yaml
+        return yaml(d)
+
+    def as_xml(self, sanitize=True):
+        d = self.as_dict(flat=True, sanitize=sanitize)
+        from serializers import xml
+        return xml(d)
 
 
 class BEAUTIFY(DIV):
@@ -2419,27 +2487,33 @@ def test():
     <table><tr><td>a</td><td>b</td><td>c</td></tr><tr><td>d</td><td>e</td><td>f</td></tr><tr><td>1</td><td>2</td><td>3</td></tr></table>
     >>> form=FORM(INPUT(_type='text', _name='myvar', requires=IS_EXPR('int(value)<10')))
     >>> print form.xml()
-    <form action=\"\" enctype=\"multipart/form-data\" method=\"post\"><input name=\"myvar\" type=\"text\" /></form>
+    <form action=\"#\" enctype=\"multipart/form-data\" method=\"post\"><input name=\"myvar\" type=\"text\" /></form>
     >>> print form.accepts({'myvar':'34'}, formname=None)
     False
     >>> print form.xml()
-    <form action="" enctype="multipart/form-data" method="post"><input class="invalidinput" name="myvar" type="text" value="34" /><div class="error_wrapper"><div class="error" id="myvar__error">invalid expression</div></div></form>
+    <form action="#" enctype="multipart/form-data" method="post"><input class="invalidinput" name="myvar" type="text" value="34" /><div class="error_wrapper"><div class="error" id="myvar__error">invalid expression</div></div></form>
     >>> print form.accepts({'myvar':'4'}, formname=None, keepvalues=True)
     True
     >>> print form.xml()
-    <form action=\"\" enctype=\"multipart/form-data\" method=\"post\"><input name=\"myvar\" type=\"text\" value=\"4\" /></form>
+    <form action=\"#\" enctype=\"multipart/form-data\" method=\"post\"><input name=\"myvar\" type=\"text\" value=\"4\" /></form>
     >>> form=FORM(SELECT('cat', 'dog', _name='myvar'))
     >>> print form.accepts({'myvar':'dog'}, formname=None, keepvalues=True)
     True
     >>> print form.xml()
-    <form action=\"\" enctype=\"multipart/form-data\" method=\"post\"><select name=\"myvar\"><option value=\"cat\">cat</option><option selected=\"selected\" value=\"dog\">dog</option></select></form>
+    <form action=\"#\" enctype=\"multipart/form-data\" method=\"post\"><select name=\"myvar\"><option value=\"cat\">cat</option><option selected=\"selected\" value=\"dog\">dog</option></select></form>
     >>> form=FORM(INPUT(_type='text', _name='myvar', requires=IS_MATCH('^\w+$', 'only alphanumeric!')))
     >>> print form.accepts({'myvar':'as df'}, formname=None)
     False
     >>> print form.xml()
-    <form action="" enctype="multipart/form-data" method="post"><input class="invalidinput" name="myvar" type="text" value="as df" /><div class="error_wrapper"><div class="error" id="myvar__error">only alphanumeric!</div></div></form>
+    <form action="#" enctype="multipart/form-data" method="post"><input class="invalidinput" name="myvar" type="text" value="as df" /><div class="error_wrapper"><div class="error" id="myvar__error">only alphanumeric!</div></div></form>
     >>> session={}
     >>> form=FORM(INPUT(value=\"Hello World\", _name=\"var\", requires=IS_MATCH('^\w+$')))
+    >>> isinstance(form.as_dict(), dict)
+    True
+    >>> form.as_dict(flat=True).has_key("vars")
+    True
+    >>> isinstance(form.as_json(), basestring) and len(form.as_json(sanitize=False)) > 0
+    True
     >>> if form.accepts({}, session,formname=None): print 'passed'
     >>> if form.accepts({'var':'test ', '_formkey': session['_formkey[None]']}, session, formname=None): print 'passed'
     """

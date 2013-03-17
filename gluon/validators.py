@@ -20,6 +20,17 @@ import decimal
 import unicodedata
 from cStringIO import StringIO
 from utils import simple_hash, web2py_uuid, DIGEST_ALG_BY_SIZE
+from dal import FieldVirtual, FieldMethod
+
+JSONErrors = (NameError, TypeError, ValueError, AttributeError,
+              KeyError)
+try:
+    import json as simplejson
+except ImportError:
+    from gluon.contrib import simplejson
+    from gluon.contrib.simplejson.decoder import JSONDecodeError
+    JSONErrors += (JSONDecodeError,)
+
 
 __all__ = [
     'CLEANUP',
@@ -53,6 +64,7 @@ __all__ = [
     'IS_UPLOAD_FILENAME',
     'IS_UPPER',
     'IS_URL',
+    'IS_JSON',
 ]
 
 try:
@@ -159,19 +171,29 @@ class IS_MATCH(Validator):
     """
 
     def __init__(self, expression, error_message='invalid expression',
-                 strict=False, search=False, extract=False):
+                 strict=False, search=False, extract=False,
+                 unicode=False):
         if strict or not search:
             if not expression.startswith('^'):
                 expression = '^(%s)' % expression
         if strict:
             if not expression.endswith('$'):
                 expression = '(%s)$' % expression
-        self.regex = re.compile(expression)
+        if unicode:
+            if not isinstance(expression,unicode):
+                expression = expression.decode('utf8')
+            self.regex = re.compile(expression,re.UNICODE)
+        else:
+            self.regex = re.compile(expression)
         self.error_message = error_message
         self.extract = extract
+        self.unicode = unicode
 
     def __call__(self, value):
-        match = self.regex.search(value)
+        if self.unicode and not isinstance(value,unicode):
+            match = self.regex.search(str(value).decode('utf8'))
+        else:
+            match = self.regex.search(str(value))
         if match is not None:
             return (self.extract and match.group() or value, None)
         return (value, translate(self.error_message))
@@ -226,6 +248,9 @@ class IS_EXPR(Validator):
         self.environment = environment or {}
 
     def __call__(self, value):
+        if callable(self.expression):
+            return (value, self.expression(value))
+        # for backward compatibility
         self.environment.update(value=value)
         exec '__ret__=' + self.expression in self.environment
         if self.environment['__ret__']:
@@ -299,6 +324,35 @@ class IS_LENGTH(Validator):
                 pass
         return (value, translate(self.error_message)
                 % dict(min=self.minsize, max=self.maxsize))
+
+class IS_JSON(Validator):
+    """
+    example::
+        INPUT(_type='text', _name='name',
+            requires=IS_JSON(error_message="This is not a valid json input")
+
+        >>> IS_JSON()('{"a": 100}')
+        ('{"a": 100}', None)
+
+        >>> IS_JSON()('spam1234')
+        ('spam1234', 'invalid json')
+    """
+
+    def __init__(self, error_message='invalid json'):
+        self.error_message = error_message
+
+    def __call__(self, value):
+        if value is None:
+            return None
+        try:
+            return (simplejson.loads(value), None)
+        except JSONErrors:
+            return (value, translate(self.error_message))
+
+    def formatter(self,value):
+        if value is None:
+            return None
+        return simplejson.dumps(value)
 
 
 class IS_IN_SET(Validator):
@@ -464,7 +518,9 @@ class IS_IN_DB(Validator):
         if self.fields == 'all':
             fields = [f for f in table]
         else:
-            fields = [table[k] for k in self.fields]
+            fields = [table[k] for k in self.fields]        
+        ignore = (FieldVirtual,FieldMethod)
+        fields = filter(lambda f:not isinstance(f,ignore), fields)
         if self.dbset.db._dbname != 'gae':
             orderby = self.orderby or reduce(lambda a, b: a | b, fields)
             groupby = self.groupby
@@ -586,14 +642,18 @@ class IS_NOT_IN_DB(Validator):
         (tablename, fieldname) = str(self.field).split('.')
         table = self.dbset.db[tablename]
         field = table[fieldname]
-        rows = self.dbset(field == value, ignore_common_filters=self.ignore_common_filters).select(limitby=(0, 1))
-        if len(rows) > 0:
-            if isinstance(self.record_id, dict):
-                for f in self.record_id:
-                    if str(getattr(rows[0], f)) != str(self.record_id[f]):
-                        return (value, translate(self.error_message))
-            elif str(rows[0][table._id.name]) != str(self.record_id):
-                    return (value, translate(self.error_message))
+        subset = self.dbset(field == value,
+                            ignore_common_filters=self.ignore_common_filters)
+        id = self.record_id
+        if isinstance(id, dict):
+            fields = [table[f] for f in id]
+            row = subset.select(*fields, **dict(limitby=(0, 1))).first()
+            if row and any(str(row[f]) != str(id[f]) for f in id):
+                return (value, translate(self.error_message))
+        else:
+            row = subset.select(table._id, limitby=(0, 1)).first()
+            if row and str(row.id) != str(id):
+                return (value, translate(self.error_message))
         return (value, None)
 
 

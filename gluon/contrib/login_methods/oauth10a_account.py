@@ -15,10 +15,9 @@ Dependencies:
 import oauth2 as oauth
 import cgi
 
-from urllib2 import urlopen
-import urllib2
 from urllib import urlencode
 
+from gluon import current
 
 class OAuthAccount(object):
     """
@@ -63,9 +62,7 @@ class OAuthAccount(object):
         Appends the _next action to the generated url so the flows continues.
         """
         r = self.request
-        http_host = r.env.http_x_forwarded_for
-        if not http_host:
-            http_host = r.env.http_host
+        http_host = r.env.http_host
 
         url_scheme = r.env.wsgi_url_scheme
         if next:
@@ -117,8 +114,8 @@ class OAuthAccount(object):
         self.client_id = client_id
         self.client_secret = client_secret
         self.code = None
-        self.request = g['request']
-        self.session = g['session']
+        self.request = current.request
+        self.session = current.session
         self.auth_url = auth_url
         self.token_url = token_url
         self.access_token_url = access_token_url

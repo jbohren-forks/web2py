@@ -46,8 +46,8 @@ def stream_file_or_304_or_206(
     request=None,
     headers={},
     status=200,
-    error_message=None,
-):
+    error_message=None
+    ):
     if error_message is None:
         error_message = rewrite.THREAD_LOCAL.routes.error_message % 'invalid request'
     try:
@@ -100,7 +100,7 @@ def stream_file_or_304_or_206(
         enc = request.env.http_accept_encoding
         if enc and 'gzip' in enc and not 'Content-Encoding' in headers:
             gzipped = static_file + '.gz'
-            if os.path.isfile(gzipped) and os.path.getmtime(gzipped) > modified:
+            if os.path.isfile(gzipped) and os.path.getmtime(gzipped) >= modified:
                 static_file = gzipped
                 fsize = os.path.getsize(gzipped)
                 headers['Content-Encoding'] = 'gzip'

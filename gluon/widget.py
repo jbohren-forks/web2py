@@ -193,7 +193,10 @@ class web2pyDialog(object):
         self.menu = Tkinter.Menu(self.root)
         servermenu = Tkinter.Menu(self.menu, tearoff=0)
         httplog = os.path.join(self.options.folder, 'httpserver.log')
-
+        iconphoto = 'web2py.gif'
+        if os.path.exists(iconphoto):
+            img = Tkinter.PhotoImage(file=iconphoto)
+            self.root.tk.call('wm', 'iconphoto', self.root._w, img)
         # Building the Menu
         item = lambda: start_browser(httplog)
         servermenu.add_command(label='View httpserver.log',
@@ -432,6 +435,10 @@ class web2pyDialog(object):
             except:
                 pass
             try:
+                newcron.stopcron()
+            except:
+                pass
+            try:
                 self.server.stop()
             except:
                 pass
@@ -510,8 +517,7 @@ class web2pyDialog(object):
 
         if not options.taskbar:
             thread.start_new_thread(start_browser,
-                                    (get_url(ip, proto=proto, port=port),),
-                                    dict(startup=True))
+                                    (get_url(ip, proto=proto, port=port), True))
 
         self.password.configure(state='readonly')
         [ip.configure(state='disabled') for ip in self.ips.values()]
