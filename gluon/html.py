@@ -2409,6 +2409,8 @@ class MENU(DIV):
                     li = LI(A(name, **link))
                 elif link:
                     li = LI(A(name, _href=link))
+                elif all([c == '-' for c in name]):
+                    li = LI(_class='divider')
                 elif not link and isinstance(name, A):
                     li = LI(name)
                 else:
@@ -2434,12 +2436,15 @@ class MENU(DIV):
         if not select:
             select = SELECT(**self.attributes)
         for item in data:
-            if len(item) <= 4 or item[4] == True:
-                select.append(OPTION(CAT(prefix, item[0]),
-                                     _value=item[2], _selected=item[1]))
-                if len(item) > 3 and len(item[3]):
-                    self.serialize_mobile(
-                        item[3], select, prefix=CAT(prefix, item[0], '/'))
+            if isinstance(item,tuple) or isinstance(item,list):
+                if len(item) <= 4 or item[4] == True:
+                    (name, active, link) = item[:3]
+                    if not all([c == '-' for c in name]):
+                        select.append(OPTION(CAT(prefix, item[0]),
+                                             _value=item[2], _selected=item[1]))
+                        if len(item) > 3 and len(item[3]):
+                            self.serialize_mobile(
+                                item[3], select, prefix=CAT(prefix, item[0], '/'))
         select['_onchange'] = 'window.location=this.value'
         return select
 
